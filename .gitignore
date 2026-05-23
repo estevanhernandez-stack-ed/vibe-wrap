@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.vibe-wrap/
+.DS_Store
+*.log
+.env
+.env.local
+*.swp
+*.swo
+*.bak
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+.claude/
