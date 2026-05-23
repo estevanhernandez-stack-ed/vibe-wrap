@@ -1,6 +1,6 @@
 ---
 name: wrap
-description: This skill should be used when the user says `/vibe-wrap` (or `/vibe-wrap:wrap`) and wants a session-end handoff doc that reads the breadcrumb trail sibling vibe plugins already left, surfaces what shipped + what's uncommitted + what's unpushed, and gates commit + push interactively. Reads breadcrumbs, sibling session-logs / friction / wins, git state, and the active decision-log backend. Writes a markdown wrap doc to `docs/session-wraps/<ts>.md` (fallback `.vibe-wrap/wraps/<ts>.md`) and prints inline. Bumper-lanes invariant — every gate defaults to no-action and has a clear skip path. Flags: `--inline-only`, `--bridge`, `--session-window <hours>`.
+description: This skill should be used when the user says `/vibe-wrap` (or `/vibe-wrap:wrap`) and wants a session-end handoff doc that reads the breadcrumb trail sibling vibe plugins already left, surfaces what shipped + what's uncommitted + what's unpushed, and gates commit + push interactively. Multi-repo aware (read wide, mutate narrow): "What shipped" + "Still unpushed" span every sibling repo that had commits in the session window, while the commit/push gates stay scoped to the current repo. Reads breadcrumbs, sibling session-logs / friction / wins, git state across repos, and the active decision-log backend. Writes a markdown wrap doc to `docs/session-wraps/<ts>.md` (fallback `.vibe-wrap/wraps/<ts>.md`) and prints inline. Bumper-lanes invariant — every gate defaults to no-action and has a clear skip path. Flags: `--inline-only`, `--bridge`, `--session-window <hours>`, `--repos <p1,p2,...>`, `--repo-roots <dir>`, `--no-multi-repo`.
 ---
 
 # wrap — Read the trail, render the handoff, gate the rest
@@ -23,13 +23,16 @@ Read [`../guide/SKILL.md`](../guide/SKILL.md) first for shared behavior — voic
 /vibe-wrap:wrap
 ```
 
-Three flags:
+Flags:
 
 | Flag | Default | Purpose |
 |---|---|---|
 | `--inline-only` | off | Skip the file write. The wrap still prints inline; gates still surface. |
 | `--bridge` | off | Force the dashboard-bridge gate to register eligible regardless of threshold (still MCP-only). |
 | `--session-window <hours>` | 4 | Fallback window when `${CLAUDE_SESSION_ID}` is unavailable or yields no breadcrumbs. |
+| `--repos <p1,p2,...>` | (discovery) | Explicit repo set for the read-wide pass — bypasses sibling discovery. Each path is read (filtered to git repos), plus the current repo. |
+| `--repo-roots <dir>` | parent of cwd | Override the discovery scan root for sibling repos. |
+| `--no-multi-repo` | off | Disable multi-repo discovery; read the current repo only (the v0.1.0 shape). |
 
 ## Step 1 — Decision-log first-run (interactive, once)
 
@@ -52,25 +55,38 @@ python ${CLAUDE_PLUGIN_ROOT}/skills/wrap/scripts/render-wrap.py \
   --session-id ${CLAUDE_SESSION_ID} \
   [--session-window <hours>] \
   [--inline-only] \
-  [--bridge]
+  [--bridge] \
+  [--repos <p1,p2,...>] \
+  [--repo-roots <dir>] \
+  [--no-multi-repo]
 ```
 
 The script:
 
 1. Resolves the session window (earliest breadcrumb ts, else `now − window-hours`).
-2. Runs the three reader scripts (`read-breadcrumbs.py`, `read-sibling-state.py`, `git-state.py`).
-3. Reads decisions via the decision-log dispatcher (read-only).
+2. Runs the reader scripts. **Git state is read WIDE** via `multi-repo-state.py`, which discovers sibling git repos under the scan root (default = parent of cwd) and reports per-repo state for every repo that had ≥1 commit in the window — `git-state.py` remains the single-repo core it calls. `read-breadcrumbs.py` and `read-sibling-state.py` run as before.
+3. Reads decisions via the decision-log dispatcher (read-only), scoped to the current repo.
 4. Assembles the markdown wrap from [`assets/wrap-template.md`](assets/wrap-template.md).
-5. Writes to `docs/session-wraps/<YYYY-MM-DD-HHmm>.md` (fallback `.vibe-wrap/wraps/<ts>.md` if no `docs/`), unless `--inline-only`.
-6. Emits the rendered doc, then a fenced JSON block tagged ` ```VIBE-WRAP-GATE-STATE ` describing which gates are eligible.
+5. Writes to `docs/session-wraps/<YYYY-MM-DD-HHmm>.md` (fallback `.vibe-wrap/wraps/<ts>.md` if no `docs/`) **in the current repo only**, unless `--inline-only`.
+6. Emits the rendered doc, then a fenced JSON block tagged ` ```VIBE-WRAP-GATE-STATE ` describing which gates are eligible, the multi-repo discovery summary, and sibling repos' read-only state under `gates.other_repos`.
 
 **Print the rendered wrap doc inline to the user.** Then parse the gate-state JSON block — do not show that block to the user; it's the SKILL's control channel.
 
 The wrap doc has six sections: What shipped, Decisions logged, Friction signals captured, Still uncommitted, Still unpushed, Session bounds. Each renders an empty-state line when there's nothing to report — never a silent gap.
 
+**Multi-repo shape (v0.2.0 — read wide, mutate narrow):**
+
+- **What shipped** leads with `Across N repos this session (M commits total): a, b, c.` followed by a per-repo subsection (repo name, commit count, recent commits — capped at 10/repo with a truncation note). The current repo is flagged `(current)`.
+- **Still unpushed** reports the current repo's push status actionably, then lists any sibling repo ahead of its remote as **informational only** — vibe-wrap never offers to push another repo.
+- **Still uncommitted** stays scoped to the current repo (it owns the commit gate). Sibling dirty state is surfaced read-only under `gates.other_repos` in the gate-state JSON.
+
+See [`references/gate-design.md`](references/gate-design.md) § Read wide, mutate narrow for the boundary contract.
+
 ## Step 3 — Gates (interactive, default no-action)
 
 Read [`references/gate-design.md`](references/gate-design.md) for the full per-gate contract. Surface each gate only when the gate-state block marks it `eligible: true`. **Every gate defaults to no-action. Pressing enter or typing `n` skips it.**
+
+**All four gates are scoped to the current repo only (mutate narrow).** The gate-state `gates.commit` / `gates.push` reflect the current repo's state. `gates.other_repos` is a read-only array of sibling repos' uncommitted/unpushed state — surface it informationally if it helps the user, but **never offer to commit or push a sibling repo.** There is no gate for another repo.
 
 ### Gate 1 — Commit
 
@@ -142,6 +158,7 @@ Per [`../guide/references/friction-triggers.md`](../guide/references/friction-tr
 - [`scripts/render-wrap.py`](scripts/render-wrap.py) — the render core (read + render + gate state).
 - [`assets/wrap-template.md`](assets/wrap-template.md) — the markdown template.
 - [`scripts/read-breadcrumbs.py`](scripts/read-breadcrumbs.py) · [`scripts/read-sibling-state.py`](scripts/read-sibling-state.py) · [`scripts/git-state.py`](scripts/git-state.py) — trail readers.
+- [`scripts/multi-repo-state.py`](scripts/multi-repo-state.py) — multi-repo git-state aggregator (read wide). Discovers sibling repos + reports per-repo state; calls `git-state.py`'s single-repo core per repo.
 - [`scripts/decision-log/__init__.py`](scripts/decision-log/__init__.py) — decision-log dispatcher.
 - [`references/gate-design.md`](references/gate-design.md) — bumper-lanes invariant per gate.
 - [`references/secret-patterns.md`](references/secret-patterns.md) — the patterns that trigger the secrets warning.

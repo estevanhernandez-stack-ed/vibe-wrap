@@ -7,12 +7,15 @@ log within the session window, ahead-of-remote count, branch, detached
 HEAD flag, and mid-rebase flag.
 
 Usage:
-    python git-state.py [--session-start <iso-ts>]
+    python git-state.py [--session-start <iso-ts>] [--repo <path>]
 
 Args:
     --session-start  Optional ISO 8601 timestamp. When provided, `git log`
                      is filtered with --since=<this>. When omitted, the
                      20 most recent commits are returned.
+    --repo           Optional path to the repo to inspect. Defaults to the
+                     current working directory. Lets a multi-repo wrapper
+                     reuse this single-repo logic against sibling repos.
 
 Output:
     JSON object on stdout. Schema:
@@ -166,6 +169,113 @@ def parse_log(stdout: str) -> list[dict]:
     return commits
 
 
+def is_git_repo(cwd: str | None = None) -> str | None:
+    """Return the repo toplevel for `cwd`, or None if not a git repo.
+
+    A cheap gate the multi-repo wrapper calls before doing the full log read,
+    so scanning a ~70-dir parent stays fast.
+    """
+    rc, repo_root_raw, _ = run_git(["rev-parse", "--show-toplevel"], cwd=cwd)
+    if rc != 0:
+        return None
+    root = repo_root_raw.strip()
+    return root or None
+
+
+def collect_state(
+    session_start: str | None = None, cwd: str | None = None
+) -> dict:
+    """Collect structured git state for one repo at `cwd`.
+
+    This is the single-repo core. The multi-repo wrapper imports it and
+    calls it once per discovered repo. Returns the empty-state shape for a
+    non-git directory; never raises.
+    """
+    repo_root = is_git_repo(cwd)
+    if repo_root is None:
+        return empty_state()
+
+    state: dict = {
+        "is_repo": True,
+        "repo_root": repo_root,
+        "branch_name": None,
+        "detached_head_flag": False,
+        "mid_rebase_flag": False,
+        "uncommitted_files": [],
+        "commits": [],
+        "ahead_of_remote": 0,
+        "remote_name": None,
+    }
+
+    # Branch / detached HEAD detection.
+    rc_sym, _, _ = run_git(["symbolic-ref", "--short", "HEAD"], cwd=cwd)
+    if rc_sym != 0:
+        state["detached_head_flag"] = True
+    rc_branch, branch_out, _ = run_git(["branch", "--show-current"], cwd=cwd)
+    if rc_branch == 0:
+        branch = branch_out.strip()
+        state["branch_name"] = branch if branch else None
+
+    # Mid-rebase detection.
+    state["mid_rebase_flag"] = detect_mid_rebase(repo_root)
+
+    # Uncommitted + untracked files.
+    rc_status, status_out, status_err = run_git(["status", "--porcelain"], cwd=cwd)
+    if rc_status == 0:
+        state["uncommitted_files"] = parse_status_porcelain(status_out)
+    else:
+        warn(f"git status failed: {status_err.strip()}")
+
+    # Commits.
+    log_args = [
+        "log",
+        f"--pretty=format:%H{LOG_RECORD_SEP}%s{LOG_RECORD_SEP}%aI{LOG_LINE_SEP}",
+    ]
+    if session_start:
+        log_args.insert(1, f"--since={session_start}")
+    else:
+        log_args.insert(1, f"--max-count={DEFAULT_LOG_LIMIT}")
+    rc_log, log_out, log_err = run_git(log_args, cwd=cwd)
+    if rc_log == 0:
+        state["commits"] = parse_log(log_out)
+    else:
+        # Possible on a brand-new repo with no commits — quiet by default.
+        if "does not have any commits yet" not in log_err.lower():
+            warn(f"git log failed: {log_err.strip()}")
+
+    # Upstream remote name (suppressed-on-no-upstream).
+    rc_up, up_out, _ = run_git(
+        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=cwd
+    )
+    if rc_up == 0:
+        upstream = up_out.strip()
+        state["remote_name"] = upstream if upstream else None
+
+        # Ahead-of-remote count (only meaningful when upstream exists).
+        rc_ahead, ahead_out, _ = run_git(
+            ["rev-list", "--count", "HEAD..@{u}"], cwd=cwd
+        )
+        if rc_ahead == 0:
+            try:
+                # NOTE: `git rev-list HEAD..@{u}` counts commits the upstream
+                # has that we don't (i.e., behind-count). For ahead-of-remote
+                # we want @{u}..HEAD. The spec calls this "ahead_of_remote"
+                # so keep the field name; compute the right number.
+                rc_real_ahead, real_ahead_out, _ = run_git(
+                    ["rev-list", "--count", "@{u}..HEAD"], cwd=cwd
+                )
+                if rc_real_ahead == 0:
+                    state["ahead_of_remote"] = int(real_ahead_out.strip() or "0")
+                else:
+                    # Fall back to whatever the spec-named command produced.
+                    state["ahead_of_remote"] = int(ahead_out.strip() or "0")
+            except ValueError:
+                state["ahead_of_remote"] = 0
+    # No upstream → leave ahead_of_remote=0 and remote_name=None silently.
+
+    return state
+
+
 def detect_mid_rebase(repo_root: str) -> bool:
     """True if `.git/rebase-merge` or `.git/rebase-apply` exists."""
     git_dir = Path(repo_root) / ".git"
@@ -188,6 +298,7 @@ def main() -> int:
         description="Read structured git state for the current working directory.",
     )
     parser.add_argument("--session-start", dest="session_start", default=None)
+    parser.add_argument("--repo", dest="repo", default=None)
     args = parser.parse_args()
 
     # Catastrophic guard: git CLI must be on PATH.
@@ -195,94 +306,7 @@ def main() -> int:
         warn("git CLI not found on PATH")
         return 1
 
-    # Is this a git repo?
-    rc, repo_root_raw, _ = run_git(["rev-parse", "--show-toplevel"])
-    if rc != 0:
-        # Not a git directory — return empty shape, exit 0.
-        sys.stdout.write(json.dumps(empty_state(), ensure_ascii=False) + "\n")
-        return 0
-    repo_root = repo_root_raw.strip()
-
-    state: dict = {
-        "is_repo": True,
-        "repo_root": repo_root,
-        "branch_name": None,
-        "detached_head_flag": False,
-        "mid_rebase_flag": False,
-        "uncommitted_files": [],
-        "commits": [],
-        "ahead_of_remote": 0,
-        "remote_name": None,
-    }
-
-    # Branch / detached HEAD detection.
-    rc_sym, _, _ = run_git(["symbolic-ref", "--short", "HEAD"])
-    if rc_sym != 0:
-        state["detached_head_flag"] = True
-    rc_branch, branch_out, _ = run_git(["branch", "--show-current"])
-    if rc_branch == 0:
-        branch = branch_out.strip()
-        state["branch_name"] = branch if branch else None
-    if state["branch_name"] is None and not state["detached_head_flag"]:
-        # Edge case: branch --show-current empty on detached HEAD; both
-        # signals agree the branch is unset.
-        pass
-
-    # Mid-rebase detection.
-    state["mid_rebase_flag"] = detect_mid_rebase(repo_root)
-
-    # Uncommitted + untracked files.
-    rc_status, status_out, status_err = run_git(["status", "--porcelain"])
-    if rc_status == 0:
-        state["uncommitted_files"] = parse_status_porcelain(status_out)
-    else:
-        warn(f"git status failed: {status_err.strip()}")
-
-    # Commits.
-    log_args = [
-        "log",
-        f"--pretty=format:%H{LOG_RECORD_SEP}%s{LOG_RECORD_SEP}%aI{LOG_LINE_SEP}",
-    ]
-    if args.session_start:
-        log_args.insert(1, f"--since={args.session_start}")
-    else:
-        log_args.insert(1, f"--max-count={DEFAULT_LOG_LIMIT}")
-    rc_log, log_out, log_err = run_git(log_args)
-    if rc_log == 0:
-        state["commits"] = parse_log(log_out)
-    else:
-        # Possible on a brand-new repo with no commits — quiet by default.
-        if "does not have any commits yet" not in log_err.lower():
-            warn(f"git log failed: {log_err.strip()}")
-
-    # Upstream remote name (suppressed-on-no-upstream).
-    rc_up, up_out, _ = run_git(
-        ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]
-    )
-    if rc_up == 0:
-        upstream = up_out.strip()
-        state["remote_name"] = upstream if upstream else None
-
-        # Ahead-of-remote count (only meaningful when upstream exists).
-        rc_ahead, ahead_out, _ = run_git(["rev-list", "--count", "HEAD..@{u}"])
-        if rc_ahead == 0:
-            try:
-                # NOTE: `git rev-list HEAD..@{u}` counts commits the upstream
-                # has that we don't (i.e., behind-count). For ahead-of-remote
-                # we want @{u}..HEAD. The spec calls this "ahead_of_remote"
-                # so keep the field name; compute the right number.
-                rc_real_ahead, real_ahead_out, _ = run_git(
-                    ["rev-list", "--count", "@{u}..HEAD"]
-                )
-                if rc_real_ahead == 0:
-                    state["ahead_of_remote"] = int(real_ahead_out.strip() or "0")
-                else:
-                    # Fall back to whatever the spec-named command produced.
-                    state["ahead_of_remote"] = int(ahead_out.strip() or "0")
-            except ValueError:
-                state["ahead_of_remote"] = 0
-    # No upstream → leave ahead_of_remote=0 and remote_name=None silently.
-
+    state = collect_state(session_start=args.session_start, cwd=args.repo)
     sys.stdout.write(json.dumps(state, ensure_ascii=False) + "\n")
     return 0
 

@@ -75,6 +75,7 @@ TEMPLATE_PATH = ASSETS_DIR / "wrap-template.md"
 READ_BREADCRUMBS = SCRIPT_DIR / "read-breadcrumbs.py"
 READ_SIBLING_STATE = SCRIPT_DIR / "read-sibling-state.py"
 GIT_STATE = SCRIPT_DIR / "git-state.py"
+MULTI_REPO_STATE = SCRIPT_DIR / "multi-repo-state.py"
 DECISION_LOG_INIT = SCRIPT_DIR / "decision-log" / "__init__.py"
 
 DEFAULT_WINDOW_HOURS = 4
@@ -225,6 +226,79 @@ def read_git_state(session_start_iso: str) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def empty_git_state() -> dict[str, Any]:
+    """The non-git-directory shape (mirrors git-state.py.empty_state())."""
+    return {
+        "is_repo": False,
+        "repo_root": None,
+        "branch_name": None,
+        "detached_head_flag": False,
+        "mid_rebase_flag": False,
+        "uncommitted_files": [],
+        "commits": [],
+        "ahead_of_remote": 0,
+        "remote_name": None,
+    }
+
+
+def read_multi_repo_state(
+    session_start_iso: str,
+    repos: str | None,
+    repo_roots: str | None,
+    no_multi_repo: bool,
+) -> dict[str, Any]:
+    """Run multi-repo-state.py — the read-wide aggregator.
+
+    Returns the envelope {current_repo, scan_root, multi_repo, repos[]}. On
+    any failure, returns a single-repo-only envelope built from git-state.py
+    so the wrap still renders (read wide degrades gracefully to read narrow).
+    """
+    extra: list[str] = ["--session-start", session_start_iso]
+    if repos:
+        extra += ["--repos", repos]
+    if repo_roots:
+        extra += ["--repo-roots", repo_roots]
+    if no_multi_repo:
+        extra.append("--no-multi-repo")
+    data, err = run_reader(MULTI_REPO_STATE, extra)
+    if err is not None or not isinstance(data, dict):
+        if err is not None:
+            warn(err)
+        # Degrade to single-repo via git-state.py.
+        git = read_git_state(session_start_iso)
+        commits = git.get("commits", []) or []
+        cur = dict(git)
+        cur["is_current"] = True
+        cur["repo_label"] = (
+            Path(git.get("repo_root")).name if git.get("repo_root") else "(not a git repo)"
+        )
+        cur["commits_in_window"] = len(commits)
+        cur["commits_truncated"] = False
+        return {
+            "current_repo": git.get("repo_root"),
+            "scan_root": None,
+            "multi_repo": False,
+            "repos": [cur],
+        }
+    return data
+
+
+def current_repo_state(envelope: dict[str, Any]) -> dict[str, Any]:
+    """Extract the current repo's single-repo state from the envelope.
+
+    The current repo owns the mutating gates (read wide, mutate narrow), so
+    its plain git-state shape drives the commit/push gates + cwd-scoped
+    sections. Falls back to the empty shape if no current entry is present.
+    """
+    for entry in envelope.get("repos", []) or []:
+        if entry.get("is_current"):
+            return entry
+    repos = envelope.get("repos", []) or []
+    if repos:
+        return repos[0]
+    return empty_git_state()
+
+
 def read_decisions(
     window_start_iso: str, window_end_iso: str, cwd: Path
 ) -> tuple[list[dict], str]:
@@ -320,24 +394,59 @@ def fmt_duration(start: _dt.datetime | None, end: _dt.datetime | None) -> str:
     return f"{minutes}m"
 
 
+def _repos_with_commits(envelope: dict[str, Any]) -> list[dict]:
+    """Repos in the envelope that have ≥1 in-window commit, ordered as-given."""
+    out: list[dict] = []
+    for entry in envelope.get("repos", []) or []:
+        if (entry.get("commits_in_window", 0) or 0) >= 1:
+            out.append(entry)
+    return out
+
+
 def render_what_shipped(
-    git: dict[str, Any], breadcrumbs: list[dict], sibling_state: dict[str, dict]
+    envelope: dict[str, Any], breadcrumbs: list[dict], sibling_state: dict[str, dict]
 ) -> str:
-    """The 'What shipped' section — commits, files, breadcrumb activity."""
+    """The 'What shipped' section — multi-repo: lead line + per-repo subsections.
+
+    Read wide: every repo with in-window commits is surfaced. The current
+    repo is one of them (flagged); sibling repos are read-only context.
+    """
     lines: list[str] = []
-    commits = git.get("commits", []) or []
-    branch = git.get("branch_name") or ("detached HEAD" if git.get("detached_head_flag") else "unknown")
-    if commits:
-        most_recent = commits[0].get("subject", "(no subject)")
-        lines.append(f"- {len(commits)} commits on `{branch}`. Most recent: `{most_recent}`.")
-        # Show up to 5 commit subjects for context.
-        shown = commits[:5]
-        for c in shown:
-            sha = (c.get("sha") or "")[:7]
-            subj = c.get("subject", "(no subject)")
-            lines.append(f"  - `{sha}` {subj}")
-        if len(commits) > len(shown):
-            lines.append(f"  - ... and {len(commits) - len(shown)} more")
+    active = _repos_with_commits(envelope)
+
+    if active:
+        total_commits = sum(r.get("commits_in_window", 0) or 0 for r in active)
+        names = ", ".join(r.get("repo_label", "?") for r in active)
+        n_repos = len(active)
+        if n_repos > 1:
+            lines.append(
+                f"- Across {n_repos} repos this session "
+                f"({total_commits} commits total): {names}."
+            )
+        else:
+            lines.append(
+                f"- {total_commits} commit{'s' if total_commits != 1 else ''} "
+                f"in {names} this session."
+            )
+        # Per-repo subsection: repo name, count, recent commits.
+        for r in active:
+            label = r.get("repo_label", "?")
+            branch = r.get("branch_name") or (
+                "detached HEAD" if r.get("detached_head_flag") else "unknown"
+            )
+            count = r.get("commits_in_window", 0) or 0
+            marker = " (current)" if r.get("is_current") else ""
+            lines.append(
+                f"  - **{label}**{marker} — {count} commit"
+                f"{'s' if count != 1 else ''} on `{branch}`:"
+            )
+            commits = r.get("commits", []) or []
+            for c in commits:
+                sha = (c.get("sha") or "")[:7]
+                subj = c.get("subject", "(no subject)")
+                lines.append(f"    - `{sha}` {subj}")
+            if r.get("commits_truncated") and count > len(commits):
+                lines.append(f"    - ... and {count - len(commits)} more")
     else:
         lines.append("- No commits recorded in the session window.")
 
@@ -353,7 +462,7 @@ def render_what_shipped(
             rendered = ", ".join(f"{n} ({c})" for n, c in ranked)
             lines.append(f"- Toolkit activity: {rendered}.")
 
-    if not commits and not breadcrumbs and not sibling_state:
+    if not active and not breadcrumbs and not sibling_state:
         return "- Nothing shipped in the session window. Quiet session."
     return "\n".join(lines)
 
@@ -430,8 +539,8 @@ def _status_word(code: str) -> str:
     return code or "changed"
 
 
-def render_unpushed(git: dict[str, Any]) -> str:
-    """The 'Still unpushed' section."""
+def _unpushed_line(git: dict[str, Any]) -> str:
+    """The single-repo 'unpushed' status line for the current repo."""
     if not git.get("is_repo"):
         return "- Not a git repository — no push state."
     remote = git.get("remote_name")
@@ -441,6 +550,36 @@ def render_unpushed(git: dict[str, Any]) -> str:
     if ahead == 0:
         return f"- At parity with `{remote}`. Nothing to push."
     return f"- {ahead} commit{'s' if ahead != 1 else ''} ahead of `{remote}`."
+
+
+def render_unpushed(envelope: dict[str, Any], current: dict[str, Any]) -> str:
+    """The 'Still unpushed' section — current repo actionable, others read-only.
+
+    Read wide, mutate narrow: the current repo's ahead-count drives the push
+    gate. Sibling repos that are ahead of their remote are surfaced
+    informational-only — vibe-wrap never offers to push another repo.
+    """
+    lines: list[str] = [_unpushed_line(current)]
+
+    others_ahead: list[str] = []
+    current_key = (current.get("repo_root") or "").lower()
+    for entry in envelope.get("repos", []) or []:
+        if entry.get("is_current"):
+            continue
+        if (entry.get("repo_root") or "").lower() == current_key:
+            continue
+        ahead = entry.get("ahead_of_remote", 0) or 0
+        remote = entry.get("remote_name")
+        if ahead >= 1 and remote is not None:
+            label = entry.get("repo_label", "?")
+            others_ahead.append(
+                f"  - {label}: {ahead} commit{'s' if ahead != 1 else ''} "
+                f"ahead of `{remote}` (read-only — push it yourself)."
+            )
+    if others_ahead:
+        lines.append("- Other repos with unpushed commits (informational only):")
+        lines.extend(others_ahead)
+    return "\n".join(lines)
 
 
 def render_session_bounds(start_iso: str, end_iso: str) -> str:
@@ -459,17 +598,51 @@ def render_session_bounds(start_iso: str, end_iso: str) -> str:
 # --------------------------------------------------------------------------
 
 
+def _other_repos_readonly(
+    envelope: dict[str, Any], current: dict[str, Any]
+) -> list[dict]:
+    """Read-only state for sibling repos: uncommitted/unpushed counts.
+
+    Surfaced so the SKILL/user can SEE other repos' dirty state, but the
+    commit/push gates never act on them (read wide, mutate narrow).
+    """
+    out: list[dict] = []
+    current_key = (current.get("repo_root") or "").lower()
+    for entry in envelope.get("repos", []) or []:
+        if entry.get("is_current"):
+            continue
+        if (entry.get("repo_root") or "").lower() == current_key:
+            continue
+        out.append(
+            {
+                "repo_label": entry.get("repo_label"),
+                "repo_root": entry.get("repo_root"),
+                "commits_in_window": entry.get("commits_in_window", 0),
+                "uncommitted_count": len(entry.get("uncommitted_files", []) or []),
+                "ahead_of_remote": entry.get("ahead_of_remote", 0) or 0,
+                "remote_name": entry.get("remote_name"),
+            }
+        )
+    return out
+
+
 def compute_gate_state(
     git: dict[str, Any],
     backend: str,
     decisions: list[dict],
     secret_matches: list[dict],
     force_bridge: bool,
+    envelope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compute which gates the SKILL should surface, per spec § Subsystem C.
 
     Returns a structured dict. The SKILL reads this to drive the interactive
     gestures. render-wrap performs NO mutations — it only reports eligibility.
+
+    READ WIDE, MUTATE NARROW: `git` here is the CURRENT repo's state — the
+    only repo the commit/push gates ever touch. Sibling repos' uncommitted /
+    unpushed state is reported under `other_repos` as read-only context, never
+    as an actionable gate. The SKILL must not offer to commit/push other repos.
     """
     is_repo = bool(git.get("is_repo"))
     detached = bool(git.get("detached_head_flag"))
@@ -529,6 +702,10 @@ def compute_gate_state(
             "detached_head": detached,
             "mid_rebase": mid_rebase,
         },
+        # Read-wide context: sibling repos' dirty state. NEVER an actionable
+        # gate — the SKILL surfaces this read-only and mutates only the
+        # current repo above.
+        "other_repos": _other_repos_readonly(envelope or {}, git),
     }
 
 
@@ -540,7 +717,8 @@ def compute_gate_state(
 def assemble_doc(
     template: str,
     wrap_ts: str,
-    git: dict[str, Any],
+    envelope: dict[str, Any],
+    current: dict[str, Any],
     breadcrumbs: list[dict],
     sibling_state: dict[str, dict],
     decisions: list[dict],
@@ -548,24 +726,29 @@ def assemble_doc(
     window_start_iso: str,
     window_end_iso: str,
 ) -> tuple[str, list[dict]]:
-    """Fill the template. Returns (rendered_markdown, secret_matches)."""
-    repo_root = git.get("repo_root")
-    repo_label = Path(repo_root).name if repo_root else "(not a git repo)"
-    branch = git.get("branch_name") or (
-        "detached HEAD" if git.get("detached_head_flag") else "—"
+    """Fill the template. Returns (rendered_markdown, secret_matches).
+
+    The header labels the CURRENT repo (the one that owns the gates). 'What
+    shipped' and 'Still unpushed' read wide across the envelope; the
+    uncommitted section + secret-match list stay scoped to the current repo.
+    """
+    repo_root = current.get("repo_root")
+    repo_label_str = Path(repo_root).name if repo_root else "(not a git repo)"
+    branch = current.get("branch_name") or (
+        "detached HEAD" if current.get("detached_head_flag") else "—"
     )
 
-    uncommitted_section, secret_matches = render_uncommitted(git)
+    uncommitted_section, secret_matches = render_uncommitted(current)
 
     rendered = template.format(
         wrap_timestamp=wrap_ts,
-        repo_label=repo_label,
+        repo_label=repo_label_str,
         branch_label=branch,
-        what_shipped=render_what_shipped(git, breadcrumbs, sibling_state),
+        what_shipped=render_what_shipped(envelope, breadcrumbs, sibling_state),
         decisions_logged=render_decisions(decisions, backend),
         friction_signals=render_friction(sibling_state),
         still_uncommitted=uncommitted_section,
-        still_unpushed=render_unpushed(git),
+        still_unpushed=render_unpushed(envelope, current),
         session_bounds=render_session_bounds(window_start_iso, window_end_iso),
     )
     return rendered, secret_matches
@@ -618,6 +801,25 @@ def main() -> int:
     parser.add_argument(
         "--bridge", dest="bridge", action="store_true", default=False
     )
+    parser.add_argument(
+        "--repos",
+        dest="repos",
+        default=None,
+        help="Comma-separated explicit repo set; overrides discovery.",
+    )
+    parser.add_argument(
+        "--repo-roots",
+        dest="repo_roots",
+        default=None,
+        help="Scan root for sibling-repo discovery (default = parent of cwd).",
+    )
+    parser.add_argument(
+        "--no-multi-repo",
+        dest="no_multi_repo",
+        action="store_true",
+        default=False,
+        help="Disable multi-repo discovery; fall back to current repo only.",
+    )
     args = parser.parse_args()
 
     if not TEMPLATE_PATH.exists():
@@ -643,11 +845,19 @@ def main() -> int:
     # Reader 2: sibling state.
     sibling_state = read_sibling_state(window_start_iso)
 
-    # Reader 3: git state.
-    git = read_git_state(window_start_iso)
+    # Reader 3: git state — READ WIDE. The multi-repo aggregator discovers
+    # sibling repos and reports per-repo state; the current repo (the one we
+    # MUTATE) is flagged inside the envelope.
+    envelope = read_multi_repo_state(
+        window_start_iso,
+        repos=args.repos,
+        repo_roots=args.repo_roots,
+        no_multi_repo=args.no_multi_repo,
+    )
+    current = current_repo_state(envelope)
 
-    # Reader 4: decision log (read-only).
-    cwd = Path(git.get("repo_root") or Path.cwd())
+    # Reader 4: decision log (read-only) — scoped to the current repo.
+    cwd = Path(current.get("repo_root") or Path.cwd())
     decisions, backend = read_decisions(window_start_iso, window_end_iso, cwd)
 
     # Assemble the doc.
@@ -658,7 +868,8 @@ def main() -> int:
     rendered, secret_matches = assemble_doc(
         template=template,
         wrap_ts=wrap_ts_human,
-        git=git,
+        envelope=envelope,
+        current=current,
         breadcrumbs=breadcrumbs,
         sibling_state=sibling_state,
         decisions=decisions,
@@ -667,10 +878,11 @@ def main() -> int:
         window_end_iso=window_end_iso,
     )
 
-    # Write the doc unless --inline-only.
+    # Write the doc unless --inline-only. Write target = the CURRENT repo
+    # (we mutate narrow — never write a wrap doc into a sibling repo).
     written_path: Path | None = None
     if not args.inline_only:
-        target = resolve_write_target(wrap_filename, git)
+        target = resolve_write_target(wrap_filename, current)
         written_path = write_doc(target, rendered)
         if written_path is None:
             # Write failed but we still have the rendered doc — surface inline
@@ -678,13 +890,15 @@ def main() -> int:
             # in stdout. (Catastrophic only if there were truly nothing to show.)
             warn("file write failed — emitting inline only")
 
-    # Compute gate state.
+    # Compute gate state — gates scoped to the CURRENT repo; sibling repos
+    # surfaced read-only under gates.other_repos.
     gate_state = compute_gate_state(
-        git=git,
+        git=current,
         backend=backend,
         decisions=decisions,
         secret_matches=secret_matches,
         force_bridge=args.bridge,
+        envelope=envelope,
     )
 
     # Emit: the rendered markdown, then the gate-state JSON block.
@@ -699,6 +913,20 @@ def main() -> int:
         "session_id": session_id or None,
         "window": {"start": window_start_iso, "end": window_end_iso},
         "decision_backend": backend,
+        "multi_repo": {
+            "enabled": bool(envelope.get("multi_repo")),
+            "current_repo": envelope.get("current_repo"),
+            "scan_root": envelope.get("scan_root"),
+            "repos_with_commits": [
+                {
+                    "repo_label": r.get("repo_label"),
+                    "is_current": bool(r.get("is_current")),
+                    "commits_in_window": r.get("commits_in_window", 0),
+                }
+                for r in (envelope.get("repos") or [])
+                if (r.get("commits_in_window", 0) or 0) >= 1
+            ],
+        },
         "gates": gate_state,
     }
     sys.stdout.write(json.dumps(meta, ensure_ascii=False, indent=2) + "\n")

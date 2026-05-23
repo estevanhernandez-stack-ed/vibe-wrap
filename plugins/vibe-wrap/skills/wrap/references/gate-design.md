@@ -17,6 +17,35 @@ The wrap doc itself is always produced. The gates are layered on top. The contra
 
 The invariant is enforced at the SKILL level. Each of the four gates inherits these defaults; per-gate rules below extend (never override) them.
 
+## Read wide, mutate narrow (v0.2.0 — multi-repo session awareness)
+
+> Added in v0.2.0 to fix the first-soak headline finding: **single-repo blindness.** A real session often spans many repos (the first soak touched seven); v0.1.0's wrap only ever saw the cwd's repo.
+
+The fix splits the wrap into two surfaces with a hard boundary:
+
+- **The READ path is wide.** `multi-repo-state.py` discovers sibling git repos under the scan root (default = the parent of the current repo) and reports per-repo state for every repo that had ≥1 commit in the session window. "What shipped" leads with `Across N repos this session: …` and a per-repo subsection; "Still unpushed" lists any sibling ahead of its remote — read-only.
+- **The MUTATING gates stay narrow.** The commit gate, push gate, decision-log write, and bridge all act on the **current repo only** — the one repo you're actually in. You never commit or push a repo from a wrap run against a different repo.
+
+Why this boundary is the safe design: committing or pushing a repo you aren't standing in is a high-blast-radius action with no good default — you can't reason about another repo's staging intent, branch state, or hook side effects from a wrap doc. So vibe-wrap *surfaces* sibling dirty state (so you know it exists) but *never offers to act on it*. The gate-state JSON carries sibling read-only state under `gates.other_repos`; that array is informational and has no `eligible` field, because it is never a gate.
+
+**The invariant, restated for multi-repo:** the wrap doc reads as wide as the session went; the gates reach exactly as far as the repo you're in.
+
+### Discovery bounds (keep the read cheap)
+
+The scan root may hold ~70 directories. To stay fast and relevant:
+
+- A cheap `git rev-parse` gate decides whether each child is a repo at all **before** any `git log` runs. Non-git dirs are skipped.
+- Repos with zero in-window commits are dropped from the output (the current repo is the one exception — always kept, since it owns the gates).
+- Commits shown per repo are capped (default 10); the true count is still reported, with a truncation note.
+
+### Flags (on `render-wrap.py`)
+
+| Flag | Default | Purpose |
+|---|---|---|
+| `--repos <p1,p2,...>` | (off) | Explicit repo set — bypasses discovery entirely. Each path is read (filtered to git repos), plus the current repo. |
+| `--repo-roots <dir>` | parent of cwd | Override the discovery scan root. |
+| `--no-multi-repo` | off | Fall back to cwd-only (the v0.1.0 shape). |
+
 ## Gate 1 — Commit gate
 
 **When it appears:** uncommitted files exist (`git status --porcelain` returns ≥1 line).
@@ -189,12 +218,13 @@ When user accepts: call `mcp__626Labs__bridge_context_to_architect` with the wra
 
 ## Gate-summary table
 
-| Gate | Trigger | Default | Skip path | Extra confirmation |
-|---|---|---|---|---|
-| 1 — Commit | Uncommitted files exist | `N` | Press enter / type `n` | Required for secret-pattern matches |
-| 2 — Push | Local ahead of remote | `N` | Press enter / type `n` | None (force-push never offered) |
-| 3 — Decision-log write | Active backend ≠ `disabled` | `N` | Press enter / type `n` | None |
-| 4 — Dashboard bridge | Backend = `626labs-mcp` AND threshold met | `N` | Press enter / type `n` | None |
+| Gate | Trigger | Scope | Default | Skip path | Extra confirmation |
+|---|---|---|---|---|---|
+| 1 — Commit | Uncommitted files exist | current repo only | `N` | Press enter / type `n` | Required for secret-pattern matches |
+| 2 — Push | Local ahead of remote | current repo only | `N` | Press enter / type `n` | None (force-push never offered) |
+| 3 — Decision-log write | Active backend ≠ `disabled` | current repo only | `N` | Press enter / type `n` | None |
+| 4 — Dashboard bridge | Backend = `626labs-mcp` AND threshold met | current repo only | `N` | Press enter / type `n` | None |
+| — `other_repos` | Sibling repo has commits / dirty state | read-only | n/a | n/a — **never a gate** | Informational only; vibe-wrap never commits/pushes a sibling repo |
 
 ## See also
 
