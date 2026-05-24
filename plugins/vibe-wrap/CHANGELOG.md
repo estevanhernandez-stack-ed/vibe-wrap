@@ -3,6 +3,28 @@
 All notable changes to vibe-wrap are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver.
 
+## [0.2.1] — 2026-05-23
+
+### Fixed — decision-log MCP backend
+
+Decision-log MCP backend: corrected the 626Labs MCP tool name
+(`626Labs` → `626labs-cloud`) and reframed the backend as a generic,
+optional decision-log MCP that auto-detects the 626Labs dashboard, with
+the local file backend as the universal fallback. Fixes the decision-log
+section reading "not configured" when the live MCP was present.
+
+- All decision-log MCP tool references renamed from the old `626Labs`
+  server name to `626labs-cloud` — i.e. `mcp__626labs-cloud__<tool>`
+  (`manage_decisions`, `bridge_context_to_architect`) across the backend
+  stub, the backend contract doc, the wrap / guide / friction-logger
+  SKILLs, and the gate-design / friction-triggers references.
+- Backend doc reframed: the MCP backend is optional and auto-detects the
+  recognized 626Labs dashboard; the file backends are the universal
+  fallback; the MCP is never required. Bring-your-own-MCP (a user pointing
+  the backend at their own server's tool names) is noted as a follow-on,
+  not built in this release.
+- Marketplace description genericized — no longer implies a 626-only MCP.
+
 ## [0.2.0] — 2026-05-23
 
 ### Added — multi-repo session awareness (read wide, mutate narrow)
@@ -83,5 +105,6 @@ sibling vibe plugins already left rather than cold-reconstructing the session.
 - SessionEnd nudge hook + session-logger + friction-logger for the
   self-evolving framework.
 
+[0.2.1]: https://github.com/estevanhernandez-stack-ed/vibe-wrap
 [0.2.0]: https://github.com/estevanhernandez-stack-ed/vibe-wrap
 [0.1.0]: https://github.com/estevanhernandez-stack-ed/vibe-wrap
