@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "vibe-wrap",
-      "description": "Session wrap-up that reads the breadcrumb trail your toolkit already left — not a cold reconstruction. Multi-repo aware: surfaces what shipped across every repo the session touched, what's uncommitted, and what's unpushed, then gates commit + push on the current repo only (read wide, mutate narrow). Reads sibling vibe-plugin session-logs / friction / wins, git state across repos, and a pluggable decision log (Markdown / JSONL / 626Labs MCP / disabled). Bumper-lanes invariant — every gate defaults to no-action.",
+      "description": "Session wrap-up that reads the breadcrumb trail your toolkit already left — not a cold reconstruction. Multi-repo aware: surfaces what shipped across every repo the session touched, what's uncommitted, and what's unpushed, then gates commit + push on the current repo only (read wide, mutate narrow). Reads sibling vibe-plugin session-logs / friction / wins, git state across repos, and a pluggable decision log (Markdown / JSONL / optional decision-log MCP / disabled) — the local file backend is the universal fallback; the MCP is auto-detected and never required. Bumper-lanes invariant — every gate defaults to no-action.",
       "source": "./plugins/vibe-wrap"
     }
   ]

@@ -3,7 +3,9 @@
 > **Audience:** vibe-wrap maintainers + builders configuring their decision log.
 > **Status:** four backends locked for v0.1.0 — `file-md`, `file-jsonl`, `626labs-mcp`, `disabled`.
 
-The decision log is a pluggable backend. vibe-wrap is a marketplace plugin shipped to any user — treating 626Labs MCP as the only decision-log surface would silently break the value prop for every non-626Labs user. This doc covers the contract every backend implements, the four shipped backends, the config precedence, the first-run UX, and the canonical decision shape.
+The decision log is a pluggable backend. vibe-wrap is a marketplace plugin shipped to any user, so the local file backends (`file-md` / `file-jsonl`) are the universal fallback — they need nothing but a writable path. An MCP backend is **optional**: if a decision-log MCP is available, log there. The recognized MCP we auto-detect is the 626Labs dashboard (`mcp__626labs-cloud__*`); when it's absent we fall back to the local file backend. The MCP is never required. This doc covers the contract every backend implements, the four shipped backends, the config precedence, the first-run UX, and the canonical decision shape.
+
+> **Bring-your-own-MCP** — pointing the MCP backend at a different server's tool names is a noted follow-on, not shipped in this version. Today the MCP backend recognizes the 626Labs dashboard tools; the contract and fallback are written generically so a future config can add other servers without a breaking change.
 
 ## The canonical decision shape
 
@@ -63,14 +65,14 @@ Quick (<500ms) liveness check. Used by the wrap flow to decide whether to surfac
 |---|---|
 | `file-md` | File at the resolved path is readable + writable (or the parent dir is writable for first append). |
 | `file-jsonl` | Same as `file-md`. |
-| `626labs-mcp` | Cheap MCP call — pings `mcp__626Labs__manage_decisions` with a no-op or trivial query. Times out at 500ms. |
+| `626labs-mcp` | Cheap MCP call — pings the auto-detected decision-log MCP (the recognized one is the 626Labs dashboard, `mcp__626labs-cloud__manage_decisions`) with a no-op or trivial query. Times out at 500ms. Returns `False` when no MCP is reachable, which routes the dispatcher to the local file fallback. |
 | `disabled` | Always returns `True` (nothing to fail). |
 
 ## The four backends
 
 ### `file-md` — Markdown file
 
-**Default for any user without 626Labs MCP.**
+**The universal fallback — the default whenever no decision-log MCP is reachable.**
 
 Reads and writes a Markdown file. Smart default path resolves at first run:
 
@@ -106,19 +108,19 @@ Same path resolution as `file-md`. Each decision is one JSON object per line, ex
 
 JSONL is the right choice when the user wants a machine-readable log they can pipe through `jq` or feed into other tooling. Markdown is the right choice when the user wants a log they read directly.
 
-### `626labs-mcp` — 626Labs Dashboard
+### `626labs-mcp` — decision-log MCP (auto-detects the 626Labs dashboard)
 
-Wraps the MCP tools.
+An **optional** MCP backend. It auto-detects a decision-log MCP and routes reads/writes through it; the recognized MCP today is the 626Labs dashboard, whose tools are surfaced as `mcp__626labs-cloud__*`. When no MCP is reachable, the dispatcher uses the local file fallback instead — this backend is never a hard dependency.
 
 | Method | MCP call |
 |---|---|
-| `read(window)` | `mcp__626Labs__manage_decisions` with `action: "search"` + `since: window.start` + `until: window.end`. Maps the response into the canonical decision shape. |
-| `append(decision)` | `mcp__626Labs__manage_decisions` with `action: "log"` + `title` + `body` + `projectId: <bound>` + `link` in body. Returns the MCP-issued decision ID as `ref`. |
-| `is_reachable()` | Cheap MCP probe — read a known-empty query with a 500ms timeout. |
+| `read(window)` | `mcp__626labs-cloud__manage_decisions` with `action: "search"` + `since: window.start` + `until: window.end`. Maps the response into the canonical decision shape. |
+| `append(decision)` | `mcp__626labs-cloud__manage_decisions` with `action: "log"` + `title` + `body` + `projectId: <bound>` + `link` in body. Returns the MCP-issued decision ID as `ref`. |
+| `is_reachable()` | Cheap MCP probe — read a known-empty query with a 500ms timeout. False when no decision-log MCP answers. |
 
 The MCP backend respects the project-binding convention from `~/.claude/CLAUDE.md`. If the current repo is bound to a 626Labs project, the decision tags with that project's ID. If unbound, `projectId: null` and the description includes the repo name as a fallback tag (matching the existing decision-logging discipline).
 
-**The dashboard bridge stays MCP-only.** `bridge_context_to_architect` is a 626Labs-specific composition — the strategic-layer counterpart to the operating-layer decision log. Other backends may add their own bridge contracts in future versions (e.g., a Linear backend could bridge to a Linear project; a Notion backend could bridge to a Notion database). For v0.1.0, the bridge gate appears only when the active backend is `626labs-mcp` and the threshold (see `spec.md > Decision 3`) fires.
+**The dashboard bridge stays MCP-only.** `bridge_context_to_architect` (`mcp__626labs-cloud__bridge_context_to_architect`) is a dashboard-specific composition — the strategic-layer counterpart to the operating-layer decision log. Other backends may add their own bridge contracts in future versions (e.g., a Linear backend could bridge to a Linear project; a Notion backend could bridge to a Notion database). For v0.1.0, the bridge gate appears only when the active backend is `626labs-mcp` and the threshold (see `spec.md > Decision 3`) fires. Bring-your-own-MCP — a user pointing this backend at their own server's tool names — is the noted follow-on; the contract here is generic so it can land without a breaking change.
 
 ### `disabled` — no-op
 
@@ -132,7 +134,7 @@ Active backend is resolved in this order:
 
 1. **Per-project config** — `<repo>/.vibe-wrap/config.json`. Highest priority.
 2. **Global config** — `~/.claude/plugins/data/vibe-wrap/config.json`.
-3. **Auto-detect** — if `mcp__626Labs__manage_decisions` is reachable → `626labs-mcp`. No prompt.
+3. **Auto-detect** — if a decision-log MCP is reachable (the recognized one is the 626Labs dashboard, `mcp__626labs-cloud__manage_decisions`) → `626labs-mcp`. No prompt. Optional — when nothing answers, fall through.
 4. **First-run prompt** — when none of the above resolve.
 
 ### Config schema
@@ -186,7 +188,7 @@ later by re-running with --reconfigure or editing the config file.
 choose [1-4]:
 ```
 
-When MCP is reachable, option 3 reads `available — pings to mcp__626Labs__manage_decisions succeed` and is shown enabled. Auto-detect already picks it in that case, so the picker only fires when the user has explicitly disabled auto-detect or MCP just dropped.
+When a decision-log MCP is reachable, option 3 reads `available — pings to mcp__626labs-cloud__manage_decisions succeed` and is shown enabled. Auto-detect already picks it in that case, so the picker only fires when the user has explicitly disabled auto-detect or the MCP just dropped.
 
 ### Persistence confirmation
 

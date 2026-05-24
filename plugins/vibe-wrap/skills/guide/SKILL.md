@@ -92,7 +92,7 @@ vibe-wrap never writes to:
 - `shared.*` of the unified profile (read-only territory).
 - Any other plugin's `plugins.<name>` namespace in the unified profile.
 
-The active decision-log backend may write to `<repo>/docs/decisions.md`, `<repo>/docs/decisions.jsonl`, `~/.claude/decisions.md`, `~/.claude/decisions.jsonl`, or call `mcp__626Labs__manage_decisions` — but those writes are owned by the user-chosen decision log, not by vibe-wrap's own state. They live outside vibe-wrap's namespace by design.
+The active decision-log backend may write to `<repo>/docs/decisions.md`, `<repo>/docs/decisions.jsonl`, `~/.claude/decisions.md`, `~/.claude/decisions.jsonl`, or — when an optional decision-log MCP is available (the recognized one is the 626Labs dashboard) — call `mcp__626labs-cloud__manage_decisions`; but those writes are owned by the user-chosen decision log, not by vibe-wrap's own state. They live outside vibe-wrap's namespace by design.
 
 If a future feature needs cross-plugin shared state (e.g., a wrap-specific preference exposed to other plugins), it gets its own `plugins.vibe-wrap.<field>` block in the unified profile, with a documented schema bump. Never silently write to another plugin's namespace.
 
@@ -128,7 +128,7 @@ Two layers of discovery:
 | `thesis-engine` | Reads sessions and friction. |
 | `vibe-thesis` | Reads sessions and friction. |
 | `vibe-taker` | Reads sessions and friction. |
-| `626Labs MCP` (`mcp__626Labs__*`) | Available as one of four decision-log backends; gates the dashboard bridge. |
+| Decision-log MCP (auto-detected; recognized: 626Labs dashboard `mcp__626labs-cloud__*`) | Optional — available as the MCP decision-log backend when reachable; gates the dashboard bridge. Falls back to the local file backend when absent. |
 
 **Layer 2 — Live discovery.** At command start, scan `~/.claude/plugins/data/` for any other directory containing `sessions/<date>.jsonl` or `friction.jsonl`. Parse what's there per the standard schemas. Tolerate unknown fields. Forward-compat by default.
 

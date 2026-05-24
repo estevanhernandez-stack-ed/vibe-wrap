@@ -55,7 +55,7 @@ These are the load-bearing rules. Every code path through `log()` honors all fou
   "friction_type": "complement_rejected",
   "confidence": "high",
   "symptom": "user declined the dashboard bridge gate when threshold fired",
-  "complement_involved": "mcp__626Labs__bridge_context_to_architect",
+  "complement_involved": "mcp__626labs-cloud__bridge_context_to_architect",
   "key_decisions_at_log_time": ["picked file-md backend earlier this run"]
 }
 ```
@@ -77,7 +77,7 @@ These are the load-bearing rules. Every code path through `log()` honors all fou
 
 **Optional:**
 
-- **complement_involved** — string or null. Conventionally only non-null when `friction_type === "complement_rejected"` — names the complement the user declined (e.g., `"vibe-cartographer:reflect"`, `"mcp__626Labs__bridge_context_to_architect"`).
+- **complement_involved** — string or null. Conventionally only non-null when `friction_type === "complement_rejected"` — names the complement the user declined (e.g., `"vibe-cartographer:reflect"`, `"mcp__626labs-cloud__bridge_context_to_architect"`).
 - **key_decisions_at_log_time** — array of short strings. Snapshot of session state at the moment of friction. Useful for `evolve-wrap` to correlate friction with prior decisions in the same session.
 
 ## Procedure: `log(entry)`

@@ -124,7 +124,7 @@ When `gates.bridge.eligible` is true (backend is `626labs-mcp` AND threshold met
 
 1. Name the signals from `gates.bridge.threshold_signals` (decisions logged, commits in window, bridge flag).
 2. Ask `bridge strategic context to the dashboard's Architect AI? [y/N]`. Default `N`.
-3. On `y`: call `mcp__626Labs__bridge_context_to_architect` with the wrap summary as context. If MCP is unreachable at gate time, surface a one-line note and skip silently.
+3. On `y`: call the auto-detected decision-log MCP's bridge tool — the recognized one is the 626Labs dashboard (`mcp__626labs-cloud__bridge_context_to_architect`) — with the wrap summary as context. If the MCP is unreachable at gate time, surface a one-line note and skip silently. The MCP is optional; absence is never an error.
 
 Bridge is opt-in per gesture even when the threshold fires. Never autonomous.
 

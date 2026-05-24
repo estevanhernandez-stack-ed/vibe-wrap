@@ -189,7 +189,7 @@ When user accepts: the decision body is drafted from the wrap summary excerpt + 
 
 **When it appears:** active backend is `626labs-mcp` AND the threshold (per `spec.md > Decision 3`) fires. Threshold = at least one of:
 
-- A decision was logged this session via `mcp__626Labs__manage_decisions` (detected during the decision-log read step).
+- A decision was logged this session via the decision-log MCP (the recognized one is the 626Labs dashboard, `mcp__626labs-cloud__manage_decisions`) — detected during the decision-log read step.
 - The session window covers >2 commits.
 - User passed the `--bridge` flag.
 
@@ -208,7 +208,7 @@ bridge strategic context to the dashboard's Architect AI? [y/N]
 
 Default `N`. Pressing enter skips.
 
-When user accepts: call `mcp__626Labs__bridge_context_to_architect` with the wrap summary as context. If MCP is unreachable at gate time, surface a one-line note and skip silently.
+When user accepts: call the auto-detected decision-log MCP's bridge tool — the recognized one is the 626Labs dashboard (`mcp__626labs-cloud__bridge_context_to_architect`) — with the wrap summary as context. If the MCP is unreachable at gate time, surface a one-line note and skip silently. The MCP is optional; absence is never an error.
 
 ### What's never offered
 

@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """
-mcp.py — 626labs-mcp backend.
+mcp.py — optional decision-log MCP backend.
+
+This is the auto-detected MCP path. The recognized MCP we detect is the
+626Labs dashboard, whose tools are surfaced as `mcp__626labs-cloud__*`
+(e.g. `mcp__626labs-cloud__manage_decisions`,
+`mcp__626labs-cloud__bridge_context_to_architect`). The MCP is never
+required — when no decision-log MCP is reachable, the dispatcher falls
+back to the local file / JSONL backend.
 
 Important: this module is a thin stub when invoked from CLI / standalone
-Python. The actual MCP calls (`mcp__626Labs__manage_decisions`,
-`mcp__626Labs__bridge_context_to_architect`) are tools surfaced by the
-Claude Code SKILL host — they are NOT importable Python functions.
+Python. The actual MCP calls (`mcp__626labs-cloud__manage_decisions`,
+`mcp__626labs-cloud__bridge_context_to_architect`) are tools surfaced by
+the Claude Code SKILL host — they are NOT importable Python functions.
 
 The wrap SKILL body invokes those MCP tools directly via the Claude Code
 tool surface; this module exists so the dispatcher has a uniform routing
@@ -35,7 +42,9 @@ def is_reachable() -> bool:
     Liveness check for the MCP backend.
 
     Returns True only when invoked through a SKILL context that exposes
-    `mcp__626Labs__manage_decisions`. From CLI / standalone Python: False.
+    a decision-log MCP — the recognized one is the 626Labs dashboard
+    (`mcp__626labs-cloud__manage_decisions`). From CLI / standalone
+    Python: False (correct — only the SKILL host makes MCP reachable).
 
     The SKILL host injects the MCP tool surface as Python callables ONLY
     inside SKILL execution; outside that, no such callable exists. We
