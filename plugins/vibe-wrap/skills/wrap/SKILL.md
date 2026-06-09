@@ -128,7 +128,32 @@ When `gates.bridge.eligible` is true (backend is `626labs-mcp` AND threshold met
 
 Bridge is opt-in per gesture even when the threshold fires. Never autonomous.
 
-## Step 4 — Close
+## Step 4 — Write back gate outcomes, then close
+
+### Gate outcomes write-back
+
+The render at Step 2 captured the session **as of render time**. The gates resolve minutes later — a decision logs at gate time, a commit lands, a push fires. Without a write-back the durable artifact is permanently wrong about its own session: it says `No decisions logged this session.` even when Gate 3 just logged one. The wrap doc is what a future session reads; it has to tell the truth about the run that produced it.
+
+So after **every** gate in Step 3 has resolved (accepted, declined, or skipped), and **before** calling `session-logger.end()`, append a `## Gate outcomes` block to the wrap doc this run wrote.
+
+- **Skip entirely when `--inline-only`** — no file was written, so there's nothing to append to.
+- Target the wrap-doc path from the gate-state JSON's `wrap_doc_path`. If it's `null` (the earlier write failed), skip silently — never recreate the file.
+- **Pure append.** Open the file, append the block below. Never rewrite the rendered sections above it — the render half stays reproducible; this is the one conversational addition.
+
+Emit one row per gate that was **eligible** this run (the gate-state block marks each `eligible`). A gate that never surfaced gets no row — don't pad with "not eligible" lines. Use the real resolved values, not placeholders:
+
+```markdown
+## Gate outcomes
+
+- Commit: committed N file(s) as `<sha>` — or — declined, left uncommitted — or — skipped (detached HEAD / mid-rebase)
+- Push: pushed N commit(s) to `<remote>` — or — declined, left unpushed
+- Decision log: logged to `<backend>` (ref `<id>`) — or — declined — or — append failed: `<error>`
+- Bridge: bridged strategic context to the dashboard Architect — or — declined
+```
+
+The decision-log row carries the backend name and, on a successful append, the ref ID the dispatcher returned (e.g., the 626Labs dashboard decision ID). The commit row carries the short SHA of the commit the gate produced. These are the facts a future reader needs and the next `/vibe-wrap:evolve-wrap` cycle parses.
+
+### Close
 
 End with a one-line handoff:
 
