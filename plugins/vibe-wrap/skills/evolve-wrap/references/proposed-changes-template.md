@@ -41,7 +41,7 @@ Patterns considered and explicitly held back this cycle, with the reason. This s
 - {deferred_item_1}  — held because {reason: too little signal / blast radius too large for a point release / belongs to a sibling plugin / already tracked elsewhere}.
 - {deferred_item_2}  — held because {reason}.
 
-> The `PreToolUse` breadcrumb-autodetect hook lives here by default until usage data justifies the noise-filtering work (see `../../wrap/references/breadcrumb-contract.md` § Why hybrid). Cross-session digests (`:digest`) and multi-repo wraps also default here per the PRD's "What We'd Add With More Time."
+> The `PreToolUse` breadcrumb-autodetect hook lives here by default until usage data justifies the noise-filtering work (see `../../wrap/references/breadcrumb-contract.md` § Why hybrid). Cross-session digests (`:digest`) also default here per the PRD's "What We'd Add With More Time."
 
 ## How to apply
 
