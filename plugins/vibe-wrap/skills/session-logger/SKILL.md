@@ -159,13 +159,27 @@ It does NOT write to:
 
 ## Orchestrator-context fallback
 
-When a vibe-wrap SKILL runs outside vibe-wrap's normal runtime — for example, the user invokes vibe-wrap commands inside a multi-command chat where the orchestrator can't shell out to `start.py` / `end.py` directly — the SKILLs may fall back to recording session activity in a project-local `process-notes.md` or the chat transcript, instead of the JSONL session log.
+When a vibe-wrap SKILL runs outside vibe-wrap's normal runtime — for example, the user invokes vibe-wrap commands inside a multi-command chat driven by an orchestrator — the session log is **still owned by `start.py` and `end.py`**. They are plain stdlib Python with no runtime coupling: any environment that can run a Python subprocess can run them. This very `evolve-wrap` analysis ran in orchestrator context and shelled out to them fine. "Orchestrator context" is not a license to hand-write the log.
 
-In that case, two consequences:
-1. The session JSONL stays empty for that run. `/vibe-wrap:evolve-wrap` will see no entry — friction signals from that run are recoverable only from the chat transcript or process-notes.
-2. The next native runtime invocation re-establishes JSONL coverage. Past orchestrator-only runs are not auto-backfilled.
+**The contract, in strict order of preference:**
 
-A future `:reconnect`-style backfill SKILL (mirroring Cart's reconnect procedure) could parse process-notes and synthesize sentinel + terminal entries deterministically. Not implemented in v0.1.0. Documented here so the contract is stable for when it lands.
+1. **Shell out to `start.py` / `end.py`.** This is the rule, not the exception. Even in orchestrator context the SKILL MUST still call:
+   ```
+   python ${CLAUDE_PLUGIN_ROOT}/skills/session-logger/scripts/start.py <command> <project_dir>
+   ```
+   at command start (capture the printed `sessionUUID`), and at command end pipe the partial terminal entry to:
+   ```
+   echo '<partial-entry-json>' | python ${CLAUDE_PLUGIN_ROOT}/skills/session-logger/scripts/end.py <sessionUUID>
+   ```
+   The scripts mint the UUID, fill every audit field, validate `outcome`, and enforce the schema. Routing through them is the whole point — it's what keeps the two entries paired and parseable.
+
+2. **Hand-built JSONL entries are forbidden.** Never assemble a session entry inline and append it yourself. Hand-rolled entries drift: a real observed run invented fields the schema doesn't define (`gates_accepted`, `notes`), omitted documented ones (`mode`, `persona`, `user_pushback`, `friction_notes`, `key_decisions`, `artifact_generated`), collapsed the sentinel/terminal pair into a single end-of-run timestamp, and formatted `complements_invoked` as `"626labs-cloud-mcp"` instead of the documented `"<source>:<name>"`. A drifted entry poisons `/vibe-wrap:evolve-wrap` — its own input becomes unparseable the moment two runs drift differently. If an entry genuinely must be written without the scripts, it conforms to the schema in **Entry Shapes** above *exactly*: both sentinel and terminal, the same `sessionUUID` on each, the sentinel's `outcome: "in_progress"`, every documented field present, `complements_invoked` as `"<source>:<name>"`, and no undocumented fields.
+
+3. **Process-notes / transcript only when a subprocess is genuinely impossible.** If — and only if — the environment truly cannot run a Python subprocess, fall back to recording session activity in a project-local `process-notes.md` or the chat transcript. Two consequences:
+   - The session JSONL stays empty for that run. `/vibe-wrap:evolve-wrap` sees no entry — friction signals are recoverable only from the transcript or process-notes.
+   - The next native invocation re-establishes JSONL coverage. Past script-less runs are not auto-backfilled.
+
+A future `:reconnect`-style backfill SKILL (mirroring Cart's reconnect procedure) could parse process-notes and synthesize schema-conformant sentinel + terminal entries deterministically. Not implemented yet. Documented here so the contract is stable for when it lands.
 
 ## What NOT to Log
 
