@@ -97,6 +97,12 @@ When `gates.commit.eligible` is true:
 3. Ask `commit these? [y/N]`. Default `N`.
 4. On `y`: draft a commit message from the wrap summary. Ask `accept message? [y/N/edit]`. On `y` stage the listed files and commit; on `edit` open `$EDITOR`; on `N` skip.
 5. **Secret-pattern path:** for each entry in `gates.commit.secret_matches`, fire an additional `commit despite secret-pattern match? [y/N]` per [`references/secret-patterns.md`](references/secret-patterns.md). Default `N` excludes the matched file. Record any override in the wrap doc's notes.
+6. **Friction wiring** (rows from [`../guide/references/friction-triggers.md`](../guide/references/friction-triggers.md) § /vibe-wrap):
+   - **Declined** (`n`/enter) with uncommitted files present AND a SessionEnd nudge fired earlier this session → `default_overridden` / **low**:
+     ```
+     echo '{"sessionUUID":"<uuid>","command":"wrap","friction_type":"default_overridden","confidence":"low","symptom":"declined commit gate; <N> file(s) left uncommitted"}' | python ${CLAUDE_PLUGIN_ROOT}/skills/friction-logger/scripts/log.py
+     ```
+   - **Commit message rewritten** (`edit`, and >50% of the message body changed between the draft and the accepted version) → `artifact_rewritten` / **medium**, with `symptom` quoting the draft's and the accepted message's first lines.
 
 Never `git add -A`. Never `--no-verify`. Never amend. Never empty-commit.
 
@@ -107,6 +113,10 @@ When `gates.push.eligible` is true (local ahead of a tracked remote, no unusual 
 1. Name the remote from `gates.push.remote` and the ahead count from `gates.push.ahead`.
 2. Ask `push to <remote>? [y/N]`. Default `N`.
 3. Multi-remote: after the answer, offer one follow-up `push to a different remote? [y/N]` per `gate-design.md` § Multi-remote path. List remotes excluding the upstream just handled; let the user pick.
+4. **Friction wiring:** if the user **declines** (`n`) while ahead-of-remote was non-zero → `default_overridden` / **low**:
+   ```
+   echo '{"sessionUUID":"<uuid>","command":"wrap","friction_type":"default_overridden","confidence":"low","symptom":"declined push gate; <ahead> commit(s) ahead of <remote>"}' | python ${CLAUDE_PLUGIN_ROOT}/skills/friction-logger/scripts/log.py
+   ```
 
 Force-push is never offered. Diverged branches surface as state to resolve manually.
 
@@ -125,6 +135,11 @@ When `gates.bridge.eligible` is true (backend is `626labs-mcp` AND threshold met
 1. Name the signals from `gates.bridge.threshold_signals` (decisions logged, commits in window, bridge flag).
 2. Ask `bridge strategic context to the dashboard's Architect AI? [y/N]`. Default `N`.
 3. On `y`: call the auto-detected decision-log MCP's bridge tool — the recognized one is the 626Labs dashboard (`mcp__626labs-cloud__bridge_context_to_architect`) — with the wrap summary as context. If the MCP is unreachable at gate time, surface a one-line note and skip silently. The MCP is optional; absence is never an error.
+4. **Friction wiring:** if the user **declines** (`n`) when the threshold fired organically (`threshold_signals.decisions_logged >= 1` or `commits_in_window > 2`) → `complement_rejected` / **high**, with `complement_involved` set to the bridge tool. Strong signal — the threshold may be too loose, or the prompt copy doesn't land the stakes:
+   ```
+   echo '{"sessionUUID":"<uuid>","command":"wrap","friction_type":"complement_rejected","confidence":"high","complement_involved":"mcp__626labs-cloud__bridge_context_to_architect","symptom":"declined bridge gate after threshold fired"}' | python ${CLAUDE_PLUGIN_ROOT}/skills/friction-logger/scripts/log.py
+   ```
+   If eligibility came only from `--bridge` (`threshold_signals.bridge_flag` true, neither organic signal present) and the user declines, log `default_overridden` / **low** instead — the flag is a valid override path; aggregate use signals the threshold may be too tight.
 
 Bridge is opt-in per gesture even when the threshold fires. Never autonomous.
 
@@ -176,7 +191,15 @@ Target <10s for the non-interactive portion: trail reader ≤4s, decision-log re
 
 ## Friction triggers
 
-Per [`../guide/references/friction-triggers.md`](../guide/references/friction-triggers.md) § /vibe-wrap. Fire `friction-logger.log()` at the documented trigger points — gate declined after the doc surfaced a high-signal commit, repeated re-runs in one session, first-run picker abandoned, etc. Confidence is fixed per trigger; never override at log time.
+The per-gate triggers are wired inline at their call sites in Step 3 — commit decline + commit-message rewrite (Gate 1), push decline (Gate 2), bridge decline (Gate 4). That's where the observable behavior happens, so that's where `friction-logger.log()` fires. The rows below cover the triggers that don't sit at a gate:
+
+- **First-run picker** (Step 1): user picks a non-default decision-log backend → `default_overridden` / **medium** (`symptom` names the picked backend). First-run only — never fires once config is persisted.
+- **Command-start complement decline:** user declines a Pattern #13 complement offer → `complement_rejected` / **high** (`complement_involved` = the sibling SKILL).
+- **`--inline-only` override** when the file-write was the recommended path → `sequence_revised` / **low**.
+- **Re-wrap within 10 minutes** of a prior `/vibe-wrap` for the same session → `sequence_revised` / **medium** (`symptom` carries both invocation timestamps).
+- **Universal:** `repeat_question` / `rephrase_requested` per the guide's universal triggers — only with a quoted prior in `symptom`.
+
+Full contract: [`../guide/references/friction-triggers.md`](../guide/references/friction-triggers.md) § /vibe-wrap. Confidence is fixed per trigger; never override at log time. The invocation shape is identical everywhere — pipe a partial entry JSON (`sessionUUID`, `command`, `friction_type`, `confidence`, `symptom`, optional `complement_involved`) to `python ${CLAUDE_PLUGIN_ROOT}/skills/friction-logger/scripts/log.py`. The `sessionUUID` is the one `session-logger.start()` returned at command start.
 
 ## Reference
 
