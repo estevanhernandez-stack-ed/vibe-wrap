@@ -3,6 +3,30 @@
 All notable changes to vibe-wrap are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver.
 
+## [0.3.0] — 2026-06-09
+
+### Added — gate-outcome write-back + per-gate friction wiring
+
+- Wrap docs now get a `## Gate outcomes` block appended after every gate
+  resolves (accepted / declined / skipped), before `session-logger.end()` —
+  the doc no longer claims "no decisions logged" when a gate logged one
+  minutes later. Skipped under `--inline-only`.
+- Per-gate friction logging wired inline at the gate call sites (commit
+  decline + message rewrite, push decline, bridge decline with
+  `complement_involved`) instead of a single prose pointer.
+
+### Fixed
+
+- `run_git` in `git-state.py` (and the session-end nudge hook) now decodes
+  git output as UTF-8 — kills the `â€”` mojibake in commit subjects on
+  Windows (cp1252 default). Regression test added, proven both directions.
+- Honest banner: when no breadcrumbs contributed, the wrap doc says it was
+  reconstructed from multi-repo git state + sibling logs instead of
+  claiming a breadcrumb-trail read.
+- Session-logger contract: hand-rolled JSONL entries are forbidden in
+  orchestrator context — shell out to `start.py`/`end.py`.
+- Dropped the stale "multi-repo wraps" deferred footnote (shipped in 0.2.0).
+
 ## [0.2.1] — 2026-05-23
 
 ### Fixed — decision-log MCP backend
