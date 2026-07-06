@@ -159,6 +159,36 @@ vibe-wrap does not maintain a `process-notes.md` file. Cart owns that pattern; v
 
 If the user asks vibe-wrap to log something to `process-notes.md` mid-session, surface the gap: "vibe-wrap doesn't write to `process-notes.md` — that's Cart's territory. The wrap doc captures session-level state at end. Want me to add this to the wrap when we get there?"
 
+## Operating doctrine
+
+Family procedure layer — full anatomy per move in the [canonical doctrine](https://github.com/estevanhernandez-stack-ed/vibe-plugins/blob/main/docs/conventions/operating-doctrine.md). vibe-wrap is the family's move-8 product; the overlay names the alignment so gates read as gates.
+
+```
+Operating doctrine digest — operating-doctrine v1.0.0 (2026-07-06):
+1. Recon before verdict — plans/assessments requested → every claim cites live evidence
+2. Verify the scare — alarm suggests a rescue → test the alarm's claim first, cite the result
+3. Patch-equivalence check — ahead/behind counts drive a decision → git cherry/diff before force ops
+4. Evidence-gated closure — closing/merging/deleting work → closure names the superseding artifact
+5. Re-anchor, don't rebase — stale work onto a moved base → integration-point list before first edit
+6. Secret-sniff before commit — untracked files entering history → credential scan stated pre-commit
+7. Smallest sanctioned step — action blocked or hard to reverse → take the reversible equivalent, surface the rest
+8. Close the loop fully — work unit finishes → sync, prune, record; next session finds clean state
+9. Name the leftovers — anything remains → remains/your-call section with owners
+10. Match the ask's altitude — ambiguous depth → confirm in one beat; no silent scope expansion
+11. Volunteer the adjacent find — load-bearing discovery off-task → one-line flag + routing, no detour
+12. Contradiction stop — evidence contradicts a prior conclusion → name it, re-verify, reconcile before proceeding
+```
+
+### Domain overlay — vibe-wrap's load-bearing moves
+
+- **8. Close the loop fully — the wrap IS this move productized.** The wrap doc's gate applies to itself: after a wrap, the next session finds clean state and a written trail — what shipped cites commits, what's unpushed cites repos, records are updated or their absence is named. A wrap that leaves the loop half-closed is a wrap that failed its own move.
+- **9. Name the leftovers — the wrap doc's shape.** "Still uncommitted / still unpushed / your call" sections are mandatory whenever anything remains, each item with an owner. Silence is never closure; an empty leftovers section means verified-empty, not unexamined.
+- **6. Secret-sniff before commit — the commit gate's precondition.** When the wrap's interactive gate offers a commit, the candidate set gets a credential-shape scan first and the result is stated in the gate prompt. The gate never bundles a token into a session-end commit because the user was tired. Also — move 3 (patch-equivalence) applies to the "still unpushed" claim: check content, not just ref arithmetic, before telling a user their work is at risk.
+
+Composition note: the bumper-lanes invariant (every gate defaults to no-action with a clear skip path) is move 7's house form — the reversible equivalent is always the default lane.
+
+*Provenance: operating-doctrine v1.0.0 (2026-07-06).*
+
 ## Guard rails
 
 Every vibe-wrap command checks for prerequisites before running:
