@@ -1,4 +1,5 @@
 <p align="center">
+  <img src="assets/brand/icon.svg" width="120" alt="vibe-wrap mark">
   <img alt="Vibe Wrap — end-of-session wrap-up that reads the trail your toolkit already left" src="https://626labs.dev/assets/brand/plugins/vibe-wrap-banner-1500x500.png" />
 </p>
 
